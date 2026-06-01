@@ -109,7 +109,7 @@ class QwenClient(BaseClient):
                 time.sleep(self.retry_delay * (2 ** attempt))
         return None
 
-    def text_to_speech(self, text: str, voice: str = "Tina",
+    def text_to_speech(self, text: str, voice: str = "Ethan",
                        speed: float = 0.85, output_path: Optional[Path] = None) -> Path:
         """TTS 语音合成 — 使用 qwen3.5-omni-plus 的 audio 输出
 

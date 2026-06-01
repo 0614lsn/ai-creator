@@ -24,7 +24,7 @@ VISION_MODEL = "qwen3.5-omni-plus"    # 视觉理解
 IMAGE_API_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 
 # TTS 参数
-TTS_VOICE = "Tina"
+TTS_VOICE = "Ethan"  # 温暖男声（非 Tina 女声）
 TTS_SPEED_SHORT = 0.85
 TTS_SPEED_LONG = 0.75
 TTS_PITCH = -2
