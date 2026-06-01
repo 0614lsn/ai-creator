@@ -17,7 +17,8 @@ class VideoComposer:
 
     def compose(self, images: list[Path], audio_path: Path, script: dict,
                 book_cover: Path = None, other_covers: list[Path] = None,
-                book_title: str = "", book_author: str = "") -> Path:
+                book_title: str = "", book_author: str = "",
+                bgm_path: Path = None) -> Path:
         audio_duration = self._get_audio_duration(audio_path)
 
         # 1. 片头
@@ -40,13 +41,25 @@ class VideoComposer:
                      "-i", str(concat_list), "-c", "copy", str(merged_path)]
         subprocess.run(cmd_merge, capture_output=True, check=True)
 
-        # 4. 最终输出：合并视频 + 音频
+        # 4. 最终输出：合并视频 + 音频（可选 BGM）
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_title = book_title.replace(" ", "_").replace("/", "_")[:30] if book_title else "video"
         output_path = OUTPUT_DIR / f"{timestamp}_{safe_title}.mp4"
 
-        cmd = [FFMPEG_BIN, "-y", "-i", str(merged_path), "-i", str(audio_path),
-               "-c:v", "copy", "-c:a", "aac", "-shortest", str(output_path)]
+        if bgm_path and bgm_path.exists():
+            # 混合语音 + BGM
+            mixed_audio = Path("/tmp/mixed_audio.wav")
+            cmd_mix = [FFMPEG_BIN, "-y",
+                       "-i", str(audio_path), "-i", str(bgm_path),
+                       "-filter_complex",
+                       "[0:a]volume=1.0[v];[1:a]volume=0.15,atrim=0:15,afade=t=in:d=2,afade=t=out:st=10:d=3[bgm];[v][bgm]amix=inputs=2:duration=first[a]",
+                       "-map", "[a]", str(mixed_audio)]
+            subprocess.run(cmd_mix, capture_output=True, check=True)
+            cmd = [FFMPEG_BIN, "-y", "-i", str(merged_path), "-i", str(mixed_audio),
+                   "-c:v", "copy", "-c:a", "aac", "-shortest", str(output_path)]
+        else:
+            cmd = [FFMPEG_BIN, "-y", "-i", str(merged_path), "-i", str(audio_path),
+                   "-c:v", "copy", "-c:a", "aac", "-shortest", str(output_path)]
         subprocess.run(cmd, capture_output=True, check=True)
         return output_path
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """总控编排器：串联全部步骤，支持命令行子命令"""
 import sys
+import subprocess
 import sqlite3
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -49,11 +51,14 @@ class Orchestrator:
                         if img_path:
                             images.append(img_path)
                     text = script.get("intro", "") + "。" + script.get("quote", "")
-                    audio_path = self.qwen.text_to_speech(text, speed=0.85)
+                    audio_path = self.qwen.text_to_speech(text, speed=0.90, emotion="warm")
                     cover_path = self._get_cover(book)
+                    # 生成 BGM
+                    bgm_path = self._generate_bgm(audio_path)
                     video_path = self.composer.compose(
                         images=images, audio_path=audio_path, script=script,
                         book_cover=cover_path, book_title=book["title"], book_author=book["author"],
+                        bgm_path=bgm_path,
                     )
                     self._save_candidate(book, video_path, "short_quote")
                 except Exception as e:
@@ -131,6 +136,22 @@ class Orchestrator:
 
         conn.commit()
         conn.close()
+
+    def _generate_bgm(self, audio_path: Path) -> Path:
+        """生成环境背景音乐"""
+        from src.config import FFMPEG_BIN, AUDIO_DIR
+        duration = VideoComposer._get_audio_duration(audio_path)
+        bgm_path = AUDIO_DIR / f"bgm_{int(time.time())}.wav"
+
+        cmd = [FFMPEG_BIN, "-y",
+               "-f", "lavfi", "-i", f"sine=frequency=110:duration={duration + 5}",
+               "-f", "lavfi", "-i", f"sine=frequency=165:duration={duration + 5}",
+               "-f", "lavfi", "-i", f"sine=frequency=220:duration={duration + 5}",
+               "-filter_complex",
+               "[0:a][1:a][2:a]amix=inputs=3:duration=first:weights=0.4 0.3 0.3,volume=0.06,lowpass=f=400,aecho=0.8:0.7:40:0.3[a]",
+               "-map", "[a]", "-t", str(duration + 5), str(bgm_path)]
+        subprocess.run(cmd, capture_output=True, check=True)
+        return bgm_path
 
     def _get_cover(self, book: dict) -> Path:
         if book.get("cover_url"):

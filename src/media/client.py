@@ -110,9 +110,15 @@ class QwenClient(BaseClient):
         return None
 
     def text_to_speech(self, text: str, voice: str = "Ethan",
-                       speed: float = 0.85, output_path: Optional[Path] = None) -> Path:
-        """TTS 语音合成 — 使用 qwen3.5-omni-plus 的 audio 输出
+                       speed: float = 0.90, output_path: Optional[Path] = None,
+                       emotion: str = "warm") -> Path:
+        """TTS 语音合成 — qwen3.5-omni-plus
 
+        Args:
+            text: 要朗读的纯文本（不包含任何指令）
+            voice: 音色 (Ethan=男声)
+            speed: 语速倍率 (0.9=稍慢有感情, 1.0=正常)
+            emotion: 情感风格 (warm/sad/gentle/calm)
         Returns: 音频文件路径
         """
         import numpy as np
@@ -121,18 +127,31 @@ class QwenClient(BaseClient):
         if output_path is None:
             output_path = AUDIO_DIR / f"tts_{int(time.time())}.wav"
 
+        emotion_guide = {
+            "warm": "声音温暖而有磁性，像深夜电台主播，娓娓道来，在关键词语上略微加重语气，句尾有自然停顿",
+            "sad": "声音低沉略带忧伤，像在分享一个令人感慨的故事，节奏缓慢，情感克制但深刻",
+            "gentle": "声音轻柔温和，像是在耳边低声诉说，给人安全感和治愈感",
+            "calm": "声音平静沉稳，像冥想引导，节奏均匀，不带强烈情绪起伏",
+        }
+        style = emotion_guide.get(emotion, emotion_guide["warm"])
+
         completion = self.client.chat.completions.create(
             model=TTS_MODEL,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": f"请用自然的语气朗读以下文字，语速{speed}x：\n{text}"}
-                ],
-            }],
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"你是专业配音演员。{style}。语速 {speed}x。不要读任何指令和标点说明，只朗读文本内容。不要输出任何解释或提示文字。"
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": text}],
+                },
+            ],
             modalities=["text", "audio"],
             audio={"voice": voice, "format": "wav"},
             stream=True,
             stream_options={"include_usage": True},
+            max_tokens=8192,
         )
 
         audio_base64 = ""
