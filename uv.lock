@@ -5,17 +5,21 @@ requires-python = ">=3.11"
 [[package]]
 name = "ai-creator"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "ffmpeg-python" },
     { name = "numpy" },
     { name = "openai" },
     { name = "pillow" },
-    { name = "pytest" },
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "soundfile" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
 ]
 
 [package.metadata]
@@ -25,11 +29,13 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.4.6" },
     { name = "openai", specifier = ">=2.38.0" },
     { name = "pillow", specifier = ">=12.2.0" },
-    { name = "pytest", specifier = ">=9.0.3" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "soundfile", specifier = ">=0.13.1" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.0.3" }]
 
 [[package]]
 name = "annotated-types"

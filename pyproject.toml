@@ -1,7 +1,7 @@
 [project]
 name = "ai-creator"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI 读书视频自动化生产 Agent — 自动爬取书评、生成脚本、合成视频"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -10,8 +10,19 @@ dependencies = [
     "numpy>=2.4.6",
     "openai>=2.38.0",
     "pillow>=12.2.0",
-    "pytest>=9.0.3",
     "python-dotenv>=1.2.2",
     "requests>=2.34.2",
     "soundfile>=0.13.1",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -9,7 +9,9 @@ load_dotenv()
 ROOT_DIR = Path(__file__).parent.parent
 
 # API 配置 — 全部走 DashScope
-DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "sk-ba482d92e67a4d858fec5249bdc4a9b1")
+DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+if not DASHSCOPE_API_KEY:
+    raise RuntimeError("DASHSCOPE_API_KEY not set. Add it to .env file or export as environment variable.")
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 # 模型配置

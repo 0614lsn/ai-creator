@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Skill(*)",
+      "WebFetch(*)",
+      "WebSearch",
+      "Agent(*)",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskGet",
+      "TaskList",
+      "TaskOutput",
+      "TaskStop",
+      "CronCreate(*)",
+      "CronDelete",
+      "CronList",
+      "Monitor(*)",
+      "NotebookEdit(*)",
+      "AskUserQuestion",
+      "EnterPlanMode",
+      "ExitPlanMode",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ScheduleWakeup",
+      "PushNotification"
+    ]
+  }
+}
