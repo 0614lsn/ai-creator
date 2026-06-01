@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+data/
+*.mp4
+*.mp3
+*.wav
+*.db
+.venv/
+dist/
+*.egg-info/
+test_data/
