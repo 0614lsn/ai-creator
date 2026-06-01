@@ -36,6 +36,11 @@ IMAGE_DISPLAY_SECONDS = 5
 SUBTITLE_FONT_SIZE = 48
 SUBTITLE_FONT_COLOR = "white"
 
+# FFmpeg 和字体（使用 ffmpeg-full 确保 drawtext/subtitles 可用）
+FFMPEG_BIN = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"
+FFPROBE_BIN = "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe"
+FONT_FILE = "/System/Library/Fonts/STHeiti Medium.ttc"  # 中文字体
+
 # 去重窗口（天）
 BOOK_REUSE_DAYS = 30
 

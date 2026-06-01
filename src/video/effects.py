@@ -144,7 +144,7 @@ class FFmpegEffects:
         """通过 Pillow 渲染字幕 + overlay 滤镜叠到视频上"""
         subtitle_img = FFmpegEffects.render_subtitle_image(subtitle_text, font_size=font_size)
 
-        cmd = ["ffmpeg", "-y", "-i", str(video_path), "-i", str(subtitle_img),
+        cmd = ["/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg", "-y", "-i", str(video_path), "-i", str(subtitle_img),
                "-filter_complex",
                "[0:v][1:v]overlay=(W-w)/2:H-h-80:shortest=1",
                "-c:v", "libx264", "-c:a", "copy", "-pix_fmt", "yuv420p",
