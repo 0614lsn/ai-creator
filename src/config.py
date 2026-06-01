@@ -16,7 +16,7 @@ DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 # 模型配置
 TEXT_MODEL = "kimi-k2.6"              # 文案润色 + 质量评估（通过 DashScope）
-IMAGE_MODEL = "wan2.6-t2i"            # AI 生图（原生 DashScope API）
+IMAGE_MODEL = "qwen-image-2.0-pro"     # AI 生图（文字渲染好，组图风格一致）
 TTS_MODEL = "qwen3.5-omni-plus"       # 语音合成
 VISION_MODEL = "qwen3.5-omni-plus"    # 视觉理解
 
