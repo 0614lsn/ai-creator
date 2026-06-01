@@ -1,7 +1,6 @@
 """多模态 API 统一客户端"""
 import base64
 import time
-import json
 import requests
 from pathlib import Path
 from typing import Optional

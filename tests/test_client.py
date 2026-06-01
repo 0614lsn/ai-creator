@@ -1,6 +1,5 @@
 """API 客户端测试"""
 import pytest
-from pathlib import Path
 from src.media.client import QwenClient
 
 
