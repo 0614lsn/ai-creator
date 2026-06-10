@@ -1,68 +1,55 @@
-"""全局配置管理"""
+"""全局配置：AI 读书短视频生产管线"""
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# 项目根目录
 ROOT_DIR = Path(__file__).parent.parent
 
-# API 配置 — 全部走 DashScope
+# ── DashScope（阿里云百炼，所有模型走同一个 key）──────────────────
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 if not DASHSCOPE_API_KEY:
-    raise RuntimeError("DASHSCOPE_API_KEY not set. Add it to .env file or export as environment variable.")
+    raise RuntimeError("DASHSCOPE_API_KEY 未设置，请写入 .env 或导出环境变量")
+
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+VIDEO_SYNTHESIS_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
+TASK_QUERY_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
 
-# 模型配置
-TEXT_MODEL = "kimi-k2.6"              # 文案润色 + 质量评估（通过 DashScope）
-IMAGE_MODEL = "qwen-image-2.0-pro"     # AI 生图（文字渲染好，组图风格一致）
-TTS_MODEL = "qwen3.5-omni-plus"       # 语音合成
-VISION_MODEL = "qwen3.5-omni-plus"    # 视觉理解
+# ── 模型 ─────────────────────────────────────────────────────────
+TEXT_MODEL = "kimi-k2.6"            # 脚本/分镜生成
+TTS_MODEL = "qwen3.5-omni-plus"     # 旁白语音合成
+VIDEO_MODEL = "happyhorse-1.0-t2v"  # 文生视频（动态画面）
 
-# 生图 API（注意：不能用 OpenAI 兼容接口，需原生 API）
-IMAGE_API_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+# ── 视频生成参数（HappyHorse）────────────────────────────────────
+# 720P 0.9 元/秒，1080P 1.6 元/秒；测试期默认 720P 控制成本
+VIDEO_RESOLUTION = os.getenv("VIDEO_RESOLUTION", "720P")   # 720P / 1080P
+VIDEO_RATIO = "16:9"                # B站横屏
+CLIP_MIN_SECONDS = 3                # HappyHorse 支持 3-15 秒
+CLIP_MAX_SECONDS = 15
+VIDEO_PRICE_PER_SECOND = {"720P": 0.9, "1080P": 1.6}
 
-# TTS 参数
-TTS_VOICE = "Ethan"  # 温暖男声（非 Tina 女声）
-TTS_SPEED_SHORT = 0.85
-TTS_SPEED_LONG = 0.75
-TTS_PITCH = -2
+# ── 成片参数 ─────────────────────────────────────────────────────
+MAX_TOTAL_SECONDS = 60              # 成片不超过 1 分钟
+SHOT_GAP_SECONDS = 1.0              # 每镜头旁白后的留白（慢节奏，回味感）
+OUTPUT_FPS = 24
 
-# 视频参数
-VIDEO_RESOLUTION = (1920, 1080)
-VIDEO_FPS = 24
-IMAGE_DISPLAY_SECONDS = 5
-SUBTITLE_FONT_SIZE = 48
-SUBTITLE_FONT_COLOR = "white"
+# ── TTS 参数 ─────────────────────────────────────────────────────
+TTS_VOICE = "Ethan"                 # 温暖沉稳男声
+TTS_SPEED = 0.9                     # 慢语速，娓娓道来
 
-# FFmpeg 和字体（使用 ffmpeg-full 确保 drawtext/subtitles 可用）
+# ── FFmpeg / 字体 ────────────────────────────────────────────────
 FFMPEG_BIN = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"
 FFPROBE_BIN = "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe"
-FONT_FILE = "/System/Library/Fonts/STHeiti Medium.ttc"  # 中文字体
+FONT_NAME = "PingFang SC"           # ASS 字幕用字体名
 
-# 去重窗口（天）
-BOOK_REUSE_DAYS = 30
-
-# 数据路径
+# ── 数据路径 ─────────────────────────────────────────────────────
 DATA_DIR = ROOT_DIR / "data"
-BOOKS_DIR = DATA_DIR / "books"
-REVIEWS_DIR = DATA_DIR / "reviews"
-COVERS_DIR = DATA_DIR / "covers"
-IMAGES_DIR = DATA_DIR / "images"
-AUDIO_DIR = DATA_DIR / "audio"
-OUTPUT_DIR = DATA_DIR / "output"
+SCRIPTS_DIR = DATA_DIR / "scripts"  # 生成的脚本 JSON
+AUDIO_DIR = DATA_DIR / "audio"      # 旁白音频
+CLIPS_DIR = DATA_DIR / "clips"      # HappyHorse 视频片段
+OUTPUT_DIR = DATA_DIR / "output"    # 最终成片
+HISTORY_FILE = DATA_DIR / "history.json"  # 已做过的书，避免重复
 
-# 数据库
-DB_PATH = DATA_DIR / "books.db"
-
-# 邮件告警
-ALERT_EMAIL = "luilsn0501@gmail.com"
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-
-# 确保目录存在
-for d in [DATA_DIR, BOOKS_DIR, REVIEWS_DIR, COVERS_DIR, IMAGES_DIR, AUDIO_DIR, OUTPUT_DIR]:
+for d in [DATA_DIR, SCRIPTS_DIR, AUDIO_DIR, CLIPS_DIR, OUTPUT_DIR]:
     d.mkdir(parents=True, exist_ok=True)

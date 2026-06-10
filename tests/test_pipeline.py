@@ -1,64 +1,83 @@
-"""集成测试：端到端管线验证"""
+"""管线纯逻辑单元测试（不调用任何付费 API）"""
+import json
 import pytest
-import sqlite3
-from pathlib import Path
-from src.config import DB_PATH, DATA_DIR
-from src.content.templates import get_template, get_long_reading_structure
-from src.video.effects import SubtitleGenerator
-from src.review.scorer import VideoScorer
+
+from src.llm import _parse_json, _validate
+from src.pipeline import plan_clip_seconds
+from src.assemble import _ts, _ass_escape, _build_ass
+from src.config import CLIP_MIN_SECONDS, CLIP_MAX_SECONDS
 
 
-class TestDataPipeline:
-    def test_database_tables(self):
-        assert DB_PATH.exists()
-        conn = sqlite3.connect(str(DB_PATH))
-        tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        names = [t[0] for t in tables]
-        for t in ["books", "reviews", "crawl_log", "video_history"]:
-            assert t in names, f"Table {t} missing"
-        conn.close()
+# ── llm ──────────────────────────────────────────────────────────
 
-    def test_directories_exist(self):
-        for d in ["books", "reviews", "covers", "images", "audio", "output"]:
-            assert (DATA_DIR / d).exists(), f"{d} directory missing"
+def test_parse_json_with_fence():
+    text = '```json\n{"title": "t", "shots": []}\n```'
+    assert _parse_json(text) == {"title": "t", "shots": []}
 
 
-class TestContentTemplates:
-    def test_short_template(self):
-        t = get_template("short_quote")
-        assert t["max_duration"] == 60
-
-    def test_essay_template(self):
-        t = get_template("essay_writing")
-        assert t["max_duration"] == 70
-
-    def test_structure_routing(self):
-        assert get_long_reading_structure("小说")["name"] == "情感沉浸式"
-        assert get_long_reading_structure("哲学")["name"] == "主题漫谈式"
-        assert get_long_reading_structure("未知")["name"] == "综合式"
+def test_parse_json_plain():
+    assert _parse_json('{"a": 1}') == {"a": 1}
+    assert _parse_json("not json") is None
 
 
-class TestSubtitleGeneration:
-    def test_srt_format(self):
-        script = {"intro": "test intro", "quote": "test quote content"}
-        srt = SubtitleGenerator.generate_srt(script, 30.0)
-        content = srt.read_text()
-        assert "-->" in content
-        assert "test" in content.lower()
-
-    def test_time_format(self):
-        assert SubtitleGenerator._format_time(65.5) == "00:01:05,500"
+def _make_script(n_shots: int, narration: str = "这是一句正常长度的旁白文案"):
+    return {
+        "shots": [
+            {"narration": narration, "narration_en": "en", "video_prompt": "p"}
+            for _ in range(n_shots)
+        ]
+    }
 
 
-class TestVideoScorer:
-    def test_parse_score(self):
-        s = VideoScorer()
-        assert s._parse_score("85") == 85.0
-        assert s._parse_score("分数：92分") == 92.0
-        assert s._parse_score("") == 50.0
+def test_validate_accepts_normal_script():
+    assert _validate(_make_script(5))
 
-    def test_structure_scoring(self):
-        s = VideoScorer()
-        script = {"intro": "test", "quote": "test"}
-        score = s._score_structure(script, Path("/tmp/nonexistent.mp4"))
-        assert 0 <= score <= 100
+
+def test_validate_rejects_bad_shot_count():
+    assert not _validate(_make_script(2))
+    assert not _validate(_make_script(9))
+
+
+def test_validate_rejects_overlong_narration():
+    assert not _validate(_make_script(5, narration="超" * 50))
+
+
+# ── pipeline ─────────────────────────────────────────────────────
+
+def test_plan_clip_seconds_clamps_to_model_range():
+    shots = [
+        {"audio_seconds": 0.5},   # 过短 → 提到下限
+        {"audio_seconds": 5.0},   # 正常 → 向上取整留余量
+        {"audio_seconds": 30.0},  # 过长 → 压到上限
+    ]
+    plan_clip_seconds(shots)
+    assert shots[0]["clip_seconds"] == CLIP_MIN_SECONDS
+    assert shots[1]["clip_seconds"] >= 6
+    assert shots[2]["clip_seconds"] == CLIP_MAX_SECONDS
+
+
+# ── assemble ─────────────────────────────────────────────────────
+
+def test_ass_timestamp_format():
+    assert _ts(0) == "0:00:00.00"
+    assert _ts(65.5) == "0:01:05.50"
+    assert _ts(3661.25) == "1:01:01.25"
+
+
+def test_ass_escape_replaces_braces():
+    assert "{" not in _ass_escape("a{b}c")
+    assert _ass_escape("一\n二") == r"一\N二"
+
+
+def test_build_ass_contains_title_and_corner(tmp_path):
+    script = {"book": "自渡", "author": "墨多先生"}
+    shots = [
+        {"narration": "片头句", "narration_en": "intro", "visual_seconds": 5.0},
+        {"narration": "金句", "narration_en": "quote", "visual_seconds": 4.0},
+    ]
+    ass = _build_ass(script, shots, tmp_path)
+    content = ass.read_text(encoding="utf-8")
+    assert "每天一个顶级文笔" in content       # 片头大字
+    assert "《自渡》  墨多先生 著" in content   # 第二镜起角标
+    # 镜1: ZH+EN+Title+SubTitle = 4 条；镜2: ZH+EN+Corner = 3 条
+    assert content.count("Dialogue:") == 7
