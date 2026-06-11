@@ -69,7 +69,7 @@ def test_ass_escape_replaces_braces():
     assert _ass_escape("一\n二") == r"一\N二"
 
 
-def test_build_ass_contains_title_and_corner(tmp_path):
+def test_build_ass_contains_corner_and_offsets(tmp_path):
     script = {"book": "自渡", "author": "墨多先生"}
     shots = [
         {"narration": "片头句", "narration_en": "intro", "visual_seconds": 5.0},
@@ -77,7 +77,27 @@ def test_build_ass_contains_title_and_corner(tmp_path):
     ]
     ass = _build_ass(script, shots, tmp_path)
     content = ass.read_text(encoding="utf-8")
-    assert "每天一个顶级文笔" in content       # 片头大字
-    assert "《自渡》  墨多先生 著" in content   # 第二镜起角标
-    # 镜1: ZH+EN+Title+SubTitle = 4 条；镜2: ZH+EN+Corner = 3 条
-    assert content.count("Dialogue:") == 7
+    assert "《自渡》  墨多先生 著" in content     # 书名角标（仅正文镜头）
+    # 镜0（片头）: ZH+EN = 2 条；镜1: ZH+EN+Corner = 3 条
+    assert content.count("Dialogue:") == 5
+    # 第二镜字幕从片头净长之后开始
+    assert "0:00:05.00" in content
+
+
+def test_aggregate_votes_median_and_issue_merge():
+    from src.evaluate import _aggregate
+    votes = {
+        "m1": {"score": 80, "issues": ["a"]},
+        "m2": {"score": 90, "issues": ["a", "b"]},
+        "m3": None,  # 失效评委被剔除
+    }
+    agg = _aggregate(votes)
+    assert agg["score"] == 85
+    assert agg["issues"] == ["a", "b"]
+    assert agg["votes"] == {"m1": 80, "m2": 90}
+
+
+def test_aggregate_all_failed():
+    from src.evaluate import _aggregate
+    agg = _aggregate({"m1": None})
+    assert agg["score"] is None

@@ -1,12 +1,22 @@
 __pycache__/
 *.pyc
 .env
-data/
+.DS_Store
+
+# 数据目录默认不入库，但保留说明文档与 UP 主转写素材
+data/*
+!data/README.md
+!data/up_transcripts.json
+
+# 媒体产物（assets/ 下素材见 assets/README.md，因版权不入库）
 *.mp4
 *.mp3
 *.wav
+*.m4a
 *.db
+
 .venv/
 dist/
 *.egg-info/
 test_data/
+.pytest_cache/

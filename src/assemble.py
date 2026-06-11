@@ -1,4 +1,11 @@
-"""成片拼装：FFmpeg 拼接分镜 + 双语字幕 + 片头标题 + 书名角标 + BGM 混音"""
+"""成片拼装：片头 + 分镜渐隐转场 + 双语字幕 + 书名角标 + BGM 混音
+
+时间轴模型（净时长制，与原 UP 主一致）：
+  第 1 句旁白（"今天分享的是…"）与片头动画同步，片头净长 I ≥ 该句旁白长。
+  正文镜头从第 2 句起，每镜净长 V_i = 旁白时长 + 留白。
+  相邻段之间用 xfade 渐隐 D 秒，转场吃掉下一段渲染时多给的 D 秒余量，
+  因此字幕/旁白的时间轴始终按净时长累计，不受转场影响。
+"""
 import re
 import shutil
 import subprocess
@@ -9,114 +16,150 @@ from datetime import datetime
 from src.config import (
     FFMPEG_BIN, FFPROBE_BIN, FONT_NAME, OUTPUT_DIR,
     OUTPUT_FPS, SHOT_GAP_SECONDS, VIDEO_RESOLUTION,
+    BGM_DIR, BGM_VOLUME, CROSSFADE_SECONDS,
 )
 
-# 成片画布固定 1080p（720P 素材上采样，字幕清晰度不受影响）
-CANVAS_W, CANVAS_H = 1920, 1080
+# 竖屏 3:4（跟随原 UP 主）
+CANVAS_W, CANVAS_H = 1080, 1440
 
 
-def assemble(script: dict, shots: list[dict], run_id: str) -> Path:
-    """把分镜片段、旁白、字幕合成最终视频。
+def assemble(script: dict, shots: list[dict], run_id: str,
+             intro_path: Path, intro_seconds: float) -> Path:
+    """把片头、分镜片段、旁白、字幕合成最终视频。
 
-    shots 每项需含: narration, narration_en, audio_path, audio_seconds, clip_path
+    shots[0] 为片头句（画面 = intro_path，旁白与片头动画同步）；
+    shots[1:] 需含 clip_path（HappyHorse 镜头）。
     """
     workdir = Path(tempfile.mkdtemp(prefix=f"ai_creator_{run_id}_"))
     try:
-        # 每镜头展示时长 = 旁白时长 + 留白
-        for shot in shots:
+        shots[0]["visual_seconds"] = round(intro_seconds, 2)
+        for shot in shots[1:]:
             shot["visual_seconds"] = round(shot["audio_seconds"] + SHOT_GAP_SECONDS, 2)
         total = round(sum(s["visual_seconds"] for s in shots), 2)
 
-        body = _concat_video(shots, workdir)
-        audio = _build_audio(shots, total, workdir)
+        body = _concat_video(shots, intro_path, workdir)
+        audio = _build_audio(shots, intro_path, total, workdir)
         ass = _build_ass(script, shots, workdir)
         return _final_mux(body, audio, ass, script, total)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-# ── 视觉流 ───────────────────────────────────────────────────────
+# ── 视觉流（xfade 渐隐链）────────────────────────────────────────
 
-def _concat_video(shots: list[dict], workdir: Path) -> Path:
-    """每个片段统一规格并裁到精确时长，再无损拼接"""
-    segs = []
+def _concat_video(shots: list[dict], intro_path: Path, workdir: Path) -> Path:
+    """每段统一规格，相邻段 xfade 渐隐拼接"""
+    D = CROSSFADE_SECONDS
+    n = len(shots)
+
+    # 每段渲染长度 = 净长 + D（最后一段不加）；shots[0] 的画面是片头
+    segs = []   # (path, net_seconds)
     for i, shot in enumerate(shots):
+        src = intro_path if i == 0 else Path(shot["clip_path"])
+        render = shot["visual_seconds"] + (D if i < n - 1 else 0)
         seg = workdir / f"seg_{i}.mp4"
-        vf = (
-            f"scale={CANVAS_W}:{CANVAS_H}:force_original_aspect_ratio=increase,"
-            f"crop={CANVAS_W}:{CANVAS_H},fps={OUTPUT_FPS},format=yuv420p,"
-            f"tpad=stop_mode=clone:stop_duration=5"  # 片段略短时用末帧补齐
-        )
-        _run([
-            FFMPEG_BIN, "-y", "-i", str(shot["clip_path"]),
-            "-vf", vf, "-t", str(shot["visual_seconds"]),
-            "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-            str(seg),
-        ])
-        segs.append(seg)
+        _reencode(src, render, seg, pad_tail=(i == 0))
+        segs.append((seg, shot["visual_seconds"]))
 
-    concat_list = workdir / "concat.txt"
-    concat_list.write_text("\n".join(f"file '{s}'" for s in segs) + "\n")
+    if len(segs) == 1:
+        return segs[0][0]
+
+    cmd = [FFMPEG_BIN, "-y"]
+    for seg, _ in segs:
+        cmd += ["-i", str(seg)]
+    filters = []
+    offset = 0.0
+    prev = "[0:v]"
+    for i in range(1, len(segs)):
+        offset += segs[i - 1][1]
+        label = f"[x{i}]" if i < len(segs) - 1 else "[v]"
+        filters.append(
+            f"{prev}[{i}:v]xfade=transition=fade:duration={D}:offset={offset:.3f}{label}"
+        )
+        prev = label
     body = workdir / "body.mp4"
-    _run([
-        FFMPEG_BIN, "-y", "-f", "concat", "-safe", "0",
-        "-i", str(concat_list), "-c", "copy", str(body),
-    ])
+    cmd += ["-filter_complex", ";".join(filters), "-map", "[v]",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "18", str(body)]
+    _run(cmd)
     return body
 
 
-# ── 音频流 ───────────────────────────────────────────────────────
+def _reencode(src: Path, seconds: float, out: Path, pad_tail: bool = False):
+    """统一到画布规格并裁/补到指定时长（末帧 clone 补齐）"""
+    vf = (
+        f"scale={CANVAS_W}:{CANVAS_H}:force_original_aspect_ratio=increase,"
+        f"crop={CANVAS_W}:{CANVAS_H},fps={OUTPUT_FPS},format=yuv420p,"
+        f"tpad=stop_mode=clone:stop_duration={8 if pad_tail else 5}"
+    )
+    _run([FFMPEG_BIN, "-y", "-i", str(src), "-vf", vf, "-t", str(seconds),
+          "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "18", str(out)])
 
-def _build_audio(shots: list[dict], total: float, workdir: Path) -> Path:
-    """旁白轨（主）+ HappyHorse 片段自带环境音（低音量垫底）"""
+
+# ── 音频流（片头音效 + 延迟旁白 + BGM 全程）──────────────────────
+
+def _build_audio(shots: list[dict], intro_path: Path,
+                 total: float, workdir: Path) -> Path:
+    """旁白轨（片头句从 0 开始） + 片头齿轮音效 + BGM 全程"""
     narr = _concat_track(
         [(s["audio_path"], s["visual_seconds"]) for s in shots],
         workdir / "narr.wav",
     )
-    amb_inputs = [
-        (s["clip_path"] if _has_audio(s["clip_path"]) else None, s["visual_seconds"])
-        for s in shots
-    ]
-    amb = _concat_track(amb_inputs, workdir / "amb.wav")
-
     out = workdir / "audio.wav"
-    _run([
-        FFMPEG_BIN, "-y", "-i", str(narr), "-i", str(amb),
-        "-filter_complex",
-        "[0:a]aformat=sample_rates=48000:channel_layouts=stereo[v];"
-        "[1:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-        "volume=0.22,lowpass=f=6000,"
-        f"afade=t=in:d=0.8,afade=t=out:st={max(total - 1.2, 0)}:d=1.2[bg];"
-        "[v][bg]amix=inputs=2:duration=first:normalize=0,"
-        "loudnorm=I=-16:TP=-1.5:LRA=11[a]",  # 平台标准响度
-        "-map", "[a]", "-t", str(total), str(out),
-    ])
+    intro_seconds = shots[0]["visual_seconds"]
+    bgm = _pick_bgm()
+
+    cmd = [FFMPEG_BIN, "-y", "-i", str(narr)]
+    fc = "[0:a]aformat=sample_rates=48000:channel_layouts=stereo[narr];"
+    mix_inputs, idx = ["[narr]"], 1
+
+    if intro_path is not None and _has_audio(intro_path):
+        cmd += ["-i", str(intro_path)]
+        fc += (f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+               f"atrim=0:{intro_seconds},apad=whole_dur={total},volume=0.7[sfx];")
+        mix_inputs.append("[sfx]")
+        idx += 1
+
+    if bgm is not None:
+        cmd += ["-stream_loop", "-1", "-i", str(bgm)]
+        fc += (f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+               f"volume={BGM_VOLUME},"
+               f"afade=t=in:d=1,afade=t=out:st={max(total - 2.0, 0)}:d=2[bg];")
+        mix_inputs.append("[bg]")
+        idx += 1
+    else:
+        print("    提示: assets/bgm/ 下无 BGM 文件，成片无背景音乐")
+
+    fc += ("".join(mix_inputs) +
+           f"amix=inputs={len(mix_inputs)}:duration=first:normalize=0,"
+           "loudnorm=I=-16:TP=-1.5:LRA=11[a]")
+    cmd += ["-filter_complex", fc, "-map", "[a]", "-t", str(total), str(out)]
+    _run(cmd)
     return out
 
 
+def _pick_bgm() -> Path | None:
+    """取 assets/bgm 下第一个音频文件（按文件名排序）"""
+    if not BGM_DIR.exists():
+        return None
+    for f in sorted(BGM_DIR.iterdir()):
+        if f.suffix.lower() in (".mp3", ".wav", ".m4a", ".flac", ".aac"):
+            return f
+    return None
+
+
 def _concat_track(items: list[tuple], out: Path) -> Path:
-    """把 (媒体路径|None, 目标秒数) 列表逐段裁齐后串联为单条音轨"""
+    """把 (音频路径, 目标秒数) 列表逐段裁齐后串联为单条音轨"""
     cmd = [FFMPEG_BIN, "-y"]
     labels = []
     for path, _ in items:
-        if path is not None:
-            cmd += ["-i", str(path)]
-
+        cmd += ["-i", str(path)]
     filters = []
-    idx = 0
     for i, (path, seconds) in enumerate(items):
-        if path is None:  # 该片段无音轨，用静音占位
-            filters.append(
-                f"anullsrc=r=48000:cl=stereo,atrim=0:{seconds}[s{i}];"
-            )
-        else:
-            filters.append(
-                f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-                f"atrim=0:{seconds},apad=whole_dur={seconds}[s{i}];"
-            )
-            idx += 1
+        filters.append(
+            f"[{i}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"atrim=0:{seconds},apad=whole_dur={seconds}[s{i}];"
+        )
         labels.append(f"[s{i}]")
-
     filter_str = "".join(filters) + "".join(labels) + \
         f"concat=n={len(items)}:v=0:a=1[a]"
     cmd += ["-filter_complex", filter_str, "-map", "[a]", str(out)]
@@ -124,7 +167,7 @@ def _concat_track(items: list[tuple], out: Path) -> Path:
     return out
 
 
-def _has_audio(path) -> bool:
+def _has_audio(path: Path) -> bool:
     result = subprocess.run(
         [FFPROBE_BIN, "-v", "error", "-select_streams", "a",
          "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
@@ -133,7 +176,7 @@ def _has_audio(path) -> bool:
     return "audio" in result.stdout
 
 
-# ── 字幕（ASS）───────────────────────────────────────────────────
+# ── 字幕（ASS，竖屏排版）─────────────────────────────────────────
 
 _ASS_HEADER = f"""[Script Info]
 ScriptType: v4.00+
@@ -144,11 +187,9 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: ZH,{FONT_NAME},62,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,2,0,1,2.5,1.5,2,80,80,150,1
-Style: EN,{FONT_NAME},34,&H00D8D8D8,&H00D8D8D8,&H00000000,&H80000000,0,0,0,0,100,100,1,0,1,1.5,1,2,80,80,95,1
-Style: Title,{FONT_NAME},92,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,6,0,1,3,2,8,60,60,360,1
-Style: SubTitle,{FONT_NAME},58,&H00E8E8E8,&H00E8E8E8,&H00000000,&H80000000,0,0,0,0,100,100,4,0,1,2,1.5,8,60,60,500,1
-Style: Corner,{FONT_NAME},36,&H00F0F0F0,&H00F0F0F0,&H00000000,&H80000000,0,0,0,0,100,100,1,0,1,1.5,1,9,40,48,42,1
+Style: ZH,{FONT_NAME},58,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,1.5,0,1,2.5,1.5,2,60,60,300,1
+Style: EN,{FONT_NAME},30,&H00D8D8D8,&H00D8D8D8,&H00000000,&H80000000,0,1,0,0,100,100,0.5,0,1,1.5,1,2,60,60,245,1
+Style: Corner,{FONT_NAME},30,&H00F0F0F0,&H00F0F0F0,&H00000000,&H80000000,0,0,0,0,100,100,0.5,0,1,1.5,1,9,30,36,34,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -158,6 +199,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 def _build_ass(script: dict, shots: list[dict], workdir: Path) -> Path:
     book = script.get("book", "")
     author = script.get("author", "").split("/")[0].strip()
+    corner = f"《{book}》  {author} 著" if author else f"《{book}》"
     lines = []
     t = 0.0
     for i, shot in enumerate(shots):
@@ -168,15 +210,7 @@ def _build_ass(script: dict, shots: list[dict], workdir: Path) -> Path:
         lines.append(_dialogue(start, end, "ZH", r"{\fad(200,200)}" + zh))
         if en:
             lines.append(_dialogue(start, end, "EN", r"{\fad(200,200)}" + en))
-
-        if i == 0:
-            # 片头大字标题（该系列的视觉签名）
-            lines.append(_dialogue(start, end, "Title", r"{\fad(400,400)}每天一个顶级文笔"))
-            lines.append(_dialogue(start, end, "SubTitle",
-                                   r"{\fad(400,400)}—— 《" + _ass_escape(book) + r"》 ——"))
-        else:
-            # 第二镜起右上角常驻书名角标
-            corner = f"《{book}》  {author} 著" if author else f"《{book}》"
+        if i > 0:  # 片头画面自带书名大字，不叠角标
             lines.append(_dialogue(start, end, "Corner", _ass_escape(corner)))
 
     ass = workdir / "subs.ass"
